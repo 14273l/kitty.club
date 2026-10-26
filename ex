@@ -168,6 +168,9 @@ end
 
 function Library:_Reg(obj)
 	if obj.Flag then
+		if self.Options[obj.Flag] then
+			warn("[KittyLib] Duplicate flag '" .. tostring(obj.Flag) .. "' - give one of the elements a unique Flag")
+		end
 		self.Options[obj.Flag] = obj
 		self.Flags[obj.Flag] = obj.Value
 	end
@@ -273,7 +276,12 @@ function Library:_MakeColorPicker(window, holder, opts)
 		cp.Rainbow = b
 		rainbowBtn.Text = "Rainbow: " .. (b and "On" or "Off")
 		rainbowBtn.TextColor3 = b and Theme.Accent or Theme.SubText
-		if rbConn then rbConn:Disconnect(); rbConn = nil end
+		if rbConn then
+			rbConn:Disconnect()
+			local idx = table.find(Library._conns, rbConn)
+			if idx then table.remove(Library._conns, idx) end
+			rbConn = nil
+		end
 		if b then
 			rbConn = RunService.Heartbeat:Connect(function()
 				h = (tick() % 6) / 6
@@ -514,16 +522,22 @@ end
 function Library:Notify(text, duration, color)
 	if not self.NotifyHolder then return end
 	duration = duration or 3
+	text = tostring(text)
 	local wrap = New("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(260, 30), Parent = self.NotifyHolder })
-	local f = New("Frame", { BackgroundColor3 = Theme.Background, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Position = UDim2.fromOffset(-420, 0), Parent = wrap })
+	local f = New("Frame", { BackgroundColor3 = Theme.Background, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Position = UDim2.fromOffset(-500, 0), Parent = wrap })
 	Stroke(f); Highlight(f)
 	local lbl = Label(f, text, { Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -16, 1, -2) })
-	wrap.Size = UDim2.fromOffset(Clamp(lbl.TextBounds.X + 24, 200, 420), 30)
+	local textW = lbl.TextBounds.X
+	if textW <= 0 then textW = #text * 7 end
+	local width = Clamp(textW + 24, 200, 420)
+	wrap.Size = UDim2.fromOffset(width, 30)
+	local hiddenPos = UDim2.fromOffset(-(width + 30), 0)
+	f.Position = hiddenPos
 	local bar = New("Frame", { BackgroundColor3 = color or Theme.Accent, BorderSizePixel = 0, Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2), Parent = f })
 	Tween(f, { Position = UDim2.fromOffset(0, 0) }, 0.25)
 	Tween(bar, { Size = UDim2.new(0, 0, 0, 2) }, duration, Enum.EasingStyle.Linear)
 	task.delay(duration, function()
-		Tween(f, { Position = UDim2.fromOffset(-420, 0) }, 0.25)
+		Tween(f, { Position = hiddenPos }, 0.25)
 		task.wait(0.3)
 		wrap:Destroy()
 	end)
@@ -533,6 +547,7 @@ end
 -- Watermark
 --------------------------------------------------------------------------------
 function Library:CreateWatermark(opts)
+	assert(self.Gui, "[KittyLib] Call Library:CreateWindow() before CreateWatermark()")
 	opts = opts or {}
 	local wm = { Format = opts.Format or "{name} | {game} | {date} | {fps} fps | {ping} ms", Name = opts.Name or "Kitty.Club", Game = game.Name }
 	local frame = New("Frame", {
@@ -1101,10 +1116,13 @@ end
 function Library:Unload()
 	for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
 	table.clear(self._conns)
+	table.clear(self._accent)
 	if self.Gui then self.Gui:Destroy() end
 	table.clear(self.Keybinds)
 	table.clear(self.Options)
 	table.clear(self.Flags)
+	self.Gui, self.Menu, self.NotifyHolder, self.Watermark, self.Window, self.OpenPopup = nil, nil, nil, nil, nil, nil
+	self.Listening = false
 	self.Unloaded = true
 end
 
