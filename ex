@@ -1,6 +1,10 @@
 --[[
 	KittyLib - Roblox UI Library
-	Usage:  local Library = loadstring(readfile("KittyLib.lua"))()   -- or paste this source
+	Windows, tabs, sections, toggles, sliders (smooth), dropdowns (multi), color pickers (HSV + alpha + hex),
+	keybinds (toggle/hold/always), textboxes, buttons, labels, notifications, watermark,
+	live theming, animation settings, and a config system.
+
+	Usage:  local Library = loadstring(readfile("KittyLib.lua"))()   -- or paste the source / loadstring from your host
 ]]
 
 local Players          = game:GetService("Players")
@@ -11,42 +15,11 @@ local HttpService      = game:GetService("HttpService")
 local GuiService       = game:GetService("GuiService")
 local CoreGui          = game:GetService("CoreGui")
 
--- Re-execution guard
+-- Re-execution guard: unload the previous copy
 do
 	local env = (getgenv and getgenv()) or _G
 	if env.__KittyLib then pcall(function() env.__KittyLib:Unload() end) end
 end
-
-----------------------------------------------------------------------------------------------------
--- Feature detection (older clients lack FontFace / UIFlexAlignment)
-----------------------------------------------------------------------------------------------------
-local hasFontFace = false
-do
-	local ok = pcall(function()
-		local lbl = Instance.new("TextLabel")
-		lbl.FontFace = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
-	end)
-	hasFontFace = ok
-end
-
-local function makeFont(family, weight)
-	if not hasFontFace then return nil end
-	local ok, f = pcall(function()
-		return Font.new("rbxasset://fonts/families/" .. family .. ".json", weight, Enum.FontStyle.Normal)
-	end)
-	return ok and f or nil
-end
-
-local fontRegular = makeFont("Zekton", Enum.FontWeight.Regular)
-local fontBold    = makeFont("Zekton", Enum.FontWeight.Bold)
-if not fontRegular or not fontBold then
-	-- Zekton not available (or Font datatype missing) – fall back to the legacy font API
-	hasFontFace = false
-	fontRegular = Enum.Font.Gotham
-	fontBold    = Enum.Font.GothamBold
-end
-
-local hasFlex = Enum.UIFlexAlignment ~= nil
 
 local Library = {
 	Flags = {}, Options = {}, Windows = {}, Keybinds = {}, Connections = {}, Themed = {},
@@ -62,14 +35,14 @@ local Library = {
 		SubText = Color3.fromRGB(134, 134, 135),
 	},
 	Settings = {
-		AnimSpeed    = 1,
+		AnimSpeed    = 1,                         -- 0 = animations off, 2 = twice as fast
 		EasingStyle  = Enum.EasingStyle.Quint,
 		EasingDirection = Enum.EasingDirection.Out,
-		SliderSmooth = 0.5,
+		SliderSmooth = 0.5,                       -- 0 = instant, 1 = very floaty
 		TextStroke   = 0.6,
 	},
-	Font     = fontRegular,
-	FontBold = fontBold,
+	Font = Font.new("rbxasset://fonts/families/Zekton.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
+	FontBold = Font.new("rbxasset://fonts/families/Zekton.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal),
 }
 do
 	local env = (getgenv and getgenv()) or _G
@@ -86,16 +59,13 @@ function Library:Bind(obj, prop, key)
 	table.insert(self.Themed, { Obj = obj, Prop = prop, Key = key })
 end
 
+-- NOTE: text classes default to a transparent background; pass BackgroundTransparency = 0 for filled ones.
 local function Create(class, props, parent)
 	local o = Instance.new(class)
 	if o:IsA("GuiObject") then o.BorderSizePixel = 0 end
 	if class == "TextButton" or class == "ImageButton" then o.AutoButtonColor = false end
 	if TextClasses[class] then
-		if hasFontFace then
-			o.FontFace = Library.Font
-		else
-			o.Font = Library.Font
-		end
+		o.FontFace = Library.Font
 		o.TextSize = 12
 		o.Text = ""
 		o.TextColor3 = Library.Theme.Text
@@ -104,14 +74,7 @@ local function Create(class, props, parent)
 	end
 	local theme = props.Theme
 	for k, v in pairs(props) do
-		if k ~= "Theme" then
-			-- Translate FontFace prop to legacy Font prop on older clients
-			if k == "FontFace" and not hasFontFace then
-				o.Font = v
-			else
-				o[k] = v
-			end
-		end
+		if k ~= "Theme" then o[k] = v end
 	end
 	if theme then
 		for p, key in pairs(theme) do Library:Bind(o, p, key) end
@@ -128,6 +91,7 @@ local function Stroke(parent, key)
 	}, parent)
 end
 
+-- Duration in seconds after applying animation speed (0 when animations are off)
 function Library:Dur(t)
 	local speed = self.Settings.AnimSpeed
 	if speed <= 0 then return 0 end
@@ -186,6 +150,7 @@ local function FromHex(s)
 	return Color3.fromRGB(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
 end
 
+-- Screen-space position (the ScreenGui ignores the GUI inset, so InputObject.Position is off by the inset)
 local function ScreenPos(i)
 	if i.UserInputType == Enum.UserInputType.Touch then
 		local inset = GuiService:GetGuiInset()
@@ -194,6 +159,7 @@ local function ScreenPos(i)
 	return UIS:GetMouseLocation()
 end
 
+-- Drag helper (mouse + touch). onChange receives the screen position.
 local function Dragger(obj, onChange, onBegin, onEnd)
 	obj.InputBegan:Connect(function(input)
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
@@ -214,6 +180,7 @@ local function Dragger(obj, onChange, onBegin, onEnd)
 	end)
 end
 
+-- Smoothly drags `target` by moving `handle`
 local function MakeDraggable(handle, target)
 	handle.InputBegan:Connect(function(input)
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
@@ -258,9 +225,6 @@ function Library:Unload()
 	self.Unloaded = true
 	for _, c in ipairs(self.Connections) do pcall(function() c:Disconnect() end) end
 	table.clear(self.Connections)
-	for _, kb in ipairs(self.Keybinds) do
-		if kb._captureConn then pcall(function() kb._captureConn:Disconnect() end) end
-	end
 	table.clear(self.Keybinds)
 	pcall(function() Gui:Destroy() end)
 	if self.OnUnload then pcall(self.OnUnload) end
@@ -281,20 +245,21 @@ function Library:SetTheme(key, color)
 end
 
 ----------------------------------------------------------------------------------------------------
--- Popups
+-- Popups (dropdown lists, color picker). One open at a time, closed by clicking anywhere else.
 ----------------------------------------------------------------------------------------------------
 function Library:MakePopup(anchor, size, gap, alignRight)
 	local ov = self.Overlay
 	local aPos = anchor.AbsolutePosition - ov.AbsolutePosition
 	local pos = Vector2.new(alignRight and (aPos.X + anchor.AbsoluteSize.X - size.X) or aPos.X, aPos.Y + anchor.AbsoluteSize.Y + (gap or 4))
-	local bounds = ov.AbsoluteSize
-	pos = Vector2.new(math.clamp(pos.X, 4, math.max(4, bounds.X - size.X - 4)), pos.Y)
-	if pos.Y + size.Y > bounds.Y - 4 then pos = Vector2.new(pos.X, aPos.Y - size.Y - (gap or 4)) end
+	local max = ov.AbsoluteSize
+	pos = Vector2.new(math.clamp(pos.X, 4, math.max(4, max.X - size.X - 4)), pos.Y)
+	if pos.Y + size.Y > max.Y - 4 then pos = Vector2.new(pos.X, aPos.Y - size.Y - (gap or 4)) end
 
 	local group = Create("CanvasGroup", {
 		Size = UDim2.fromOffset(size.X, size.Y), Position = UDim2.fromOffset(pos.X, pos.Y + 6),
 		GroupTransparency = 1, Theme = { BackgroundColor3 = "Main" },
 	})
+	-- inset border (a stroke on the group itself would be clipped)
 	local border = Create("Frame", { Position = UDim2.fromOffset(1, 1), Size = UDim2.new(1, -2, 1, -2), BackgroundTransparency = 1, ZIndex = 50 }, group)
 	Stroke(border)
 	return group, pos
@@ -348,6 +313,7 @@ function Library:Notify(text, duration, kind)
 	if color then bar.BackgroundColor3 = color else Library:Bind(bar, "BackgroundColor3", "Accent") end
 
 	task.spawn(function()
+		-- wait until automatic sizing has produced a real height
 		local tries = 0
 		while inner.AbsoluteSize.Y <= 0 and tries < 10 do
 			tries += 1
@@ -412,7 +378,7 @@ do -- fps counter
 end
 
 ----------------------------------------------------------------------------------------------------
--- Color picker
+-- Color picker (usable standalone or as an addon on toggles / labels)
 ----------------------------------------------------------------------------------------------------
 function Library:CreateColorPicker(holder, flag, opts)
 	opts = opts or {}
@@ -445,11 +411,9 @@ function Library:CreateColorPicker(holder, flag, opts)
 	end
 
 	function obj:Set(color, transparency, silent)
-		local oldColor, oldT = self.Value, self.Transparency
 		self.H, self.S, self.V = color:ToHSV()
 		if transparency then self.Transparency = transparency end
-		local changed = (Color3.fromHSV(self.H, self.S, self.V) ~= oldColor) or (self.Transparency ~= oldT)
-		refresh(silent or not changed)
+		refresh(silent)
 	end
 
 	function obj:Open()
@@ -457,6 +421,7 @@ function Library:CreateColorPicker(holder, flag, opts)
 		local group, pos = Library:MakePopup(swatch, Vector2.new(W, H), 4, true)
 		local ui = {}
 
+		-- saturation / value square
 		local sv = Create("Frame", { Position = UDim2.fromOffset(10, 10), Size = UDim2.fromOffset(180, 110), BackgroundColor3 = Color3.fromHSV(self.H, 1, 1) }, group)
 		Stroke(sv)
 		local white = Create("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1) }, sv)
@@ -473,6 +438,7 @@ function Library:CreateColorPicker(holder, flag, opts)
 		end)
 		ui.SV, ui.SVCursor = sv, svCursor
 
+		-- hue bar
 		local hue = Create("Frame", { Position = UDim2.fromOffset(10, 128), Size = UDim2.fromOffset(180, 10), BackgroundColor3 = Color3.new(1, 1, 1) }, group)
 		Stroke(hue)
 		Create("UIGradient", { Color = ColorSequence.new({
@@ -490,6 +456,7 @@ function Library:CreateColorPicker(holder, flag, opts)
 		end)
 		ui.HueCursor = hueCursor
 
+		-- alpha bar
 		if self.Alpha then
 			local bg = Create("Frame", { Position = UDim2.fromOffset(10, 146), Size = UDim2.fromOffset(180, 10), Theme = { BackgroundColor3 = "Dark" } }, group)
 			Stroke(bg)
@@ -505,6 +472,7 @@ function Library:CreateColorPicker(holder, flag, opts)
 			ui.AlphaBar, ui.AlphaCursor = bar, cur
 		end
 
+		-- hex box
 		local hexBg = Create("Frame", { Position = UDim2.fromOffset(10, H - 28), Size = UDim2.fromOffset(180, 18), Theme = { BackgroundColor3 = "Element" } }, group)
 		Stroke(hexBg)
 		local hex = Create("TextBox", { Size = UDim2.fromScale(1, 1), Text = ToHex(self.Value), ClearTextOnFocus = false, TextColor3 = Library.Theme.SubText }, hexBg)
@@ -527,7 +495,7 @@ function Library:CreateColorPicker(holder, flag, opts)
 end
 
 ----------------------------------------------------------------------------------------------------
--- Keybind
+-- Keybind (toggle / hold / always)
 ----------------------------------------------------------------------------------------------------
 function Library:CreateKeybind(holder, flag, opts)
 	opts = opts or {}
@@ -554,11 +522,11 @@ function Library:CreateKeybind(holder, flag, opts)
 
 	function obj:SetMode(m)
 		self.Mode = m
-		self:SetState(m == "Always")
+		self:SetState(m == "Always") -- Always = on, Toggle/Hold start off
 	end
 
 	btn.MouseButton1Click:Connect(function()
-		if obj.Listening or Library.Listening then return end
+		if obj.Listening then return end
 		obj.Listening = true
 		Library.Listening = true
 		btn.Text = "[...]"
@@ -568,13 +536,11 @@ function Library:CreateKeybind(holder, flag, opts)
 			local n = InputName(i)
 			if not n then return end
 			c:Disconnect()
-			obj._captureConn = nil
 			if n == "Escape" or n == "Backspace" then n = nil end
 			obj:SetKey(n)
 			btn.TextColor3 = Library.Theme.SubText
 			task.delay(0.15, function() obj.Listening = false; Library.Listening = false end)
 		end)
-		obj._captureConn = c
 	end)
 	btn.MouseButton2Click:Connect(function()
 		local order = { Toggle = "Hold", Hold = "Always", Always = "Toggle" }
@@ -670,7 +636,6 @@ function Section:AddToggle(name, opts)
 	Register(obj, flag, opts)
 	function obj:Set(v, silent)
 		v = not not v
-		if self.Value == v then Library.Flags[flag] = v return end
 		self.Value = v
 		Library.Flags[flag] = v
 		Library:Tween(fill, { Size = v and UDim2.new(1, -4, 1, -4) or UDim2.fromOffset(0, 0) }, 0.22, Enum.EasingStyle.Back)
@@ -680,13 +645,10 @@ function Section:AddToggle(name, opts)
 	hit.MouseButton1Click:Connect(function() obj:Set(not obj.Value) end)
 	hit.MouseEnter:Connect(function() Library:Tween(boxStroke, { Color = Library.Theme.Accent }, 0.15) end)
 	hit.MouseLeave:Connect(function() Library:Tween(boxStroke, { Color = Library.Theme.Outline }, 0.15) end)
-
-	-- init without tweening (no flash on creation)
-	obj.Value = opts.Default and true or false
-	Library.Flags[flag] = obj.Value
+	obj:Set(opts.Default, true)
+	-- snap to the initial state (no animation on creation)
 	fill.Size = obj.Value and UDim2.new(1, -4, 1, -4) or UDim2.fromOffset(0, 0)
 	label.TextColor3 = obj.Value and Library.Theme.Text or Library.Theme.SubText
-
 	AttachAddons(obj, holder, name)
 	return obj
 end
@@ -787,6 +749,7 @@ function Section:AddDropdown(name, opts)
 		box.TextColor3 = txt and Library.Theme.Text or Library.Theme.SubText
 	end
 
+	-- Multi accepts a list {"A","B"} or a map {A = true, B = false}
 	function obj:Set(v, silent)
 		if multi then
 			local set = {}
@@ -801,7 +764,6 @@ function Section:AddDropdown(name, opts)
 			end
 			self.Value = set
 		else
-			if self.Value == v then Library.Flags[flag] = v; display() return end
 			self.Value = v
 		end
 		Library.Flags[flag] = self.Value
@@ -816,7 +778,6 @@ function Section:AddDropdown(name, opts)
 	end
 
 	function obj:Open()
-		if #self.Values == 0 then return end
 		local n = #self.Values
 		local vis = math.max(1, math.min(n, opts.MaxVisible or 6))
 		local group, pos = Library:MakePopup(box, Vector2.new(box.AbsoluteSize.X, vis * 20 + 4), 2)
@@ -894,11 +855,9 @@ function Section:AddTextbox(name, opts)
 	Register(obj, flag, opts)
 	function obj:Set(t, silent)
 		t = tostring(t or "")
-		local changed = (self.Value ~= t)
-		self.Value = t
+		self.Value = t; box.Text = t
 		Library.Flags[flag] = t
-		if box.Text ~= t then box.Text = t end
-		if changed and not silent then Fire(self, t) end
+		if not silent then Fire(self, t) end
 	end
 	box.Focused:Connect(function() Library:Tween(st, { Color = Library.Theme.Accent }, 0.15) end)
 	box:GetPropertyChangedSignal("Text"):Connect(function()
@@ -906,11 +865,7 @@ function Section:AddTextbox(name, opts)
 			local f = box.Text:gsub("[^%d%.%-]", "")
 			if f ~= box.Text then box.Text = f; return end
 		end
-		-- original behavior: silently update the value, fire only on FocusLost
-		if not opts.Finished then
-			obj.Value = box.Text
-			Library.Flags[flag] = box.Text
-		end
+		if not opts.Finished then obj.Value = box.Text; Library.Flags[flag] = box.Text end
 	end)
 	box.FocusLost:Connect(function()
 		Library:Tween(st, { Color = Library.Theme.Outline }, 0.15)
@@ -949,7 +904,8 @@ function Section:AddLabel(text, opts)
 end
 
 function Section:AddDivider()
-	return Create("Frame", { Size = UDim2.new(1, 0, 0, 1), Theme = { BackgroundColor3 = "Outline" } }, self.Container)
+	local d = Create("Frame", { Size = UDim2.new(1, 0, 0, 1), Theme = { BackgroundColor3 = "Outline" } }, self.Container)
+	return d
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -999,20 +955,18 @@ function Library:CreateWindow(opts)
 	local dragHandle = Create("TextButton", { Size = UDim2.new(1, 0, 0, 30) }, body)
 	MakeDraggable(dragHandle, root)
 
+	-- content panel
 	local content = Create("Frame", { Position = UDim2.fromOffset(10, 30), Size = UDim2.new(1, -20, 1, -79), Theme = { BackgroundColor3 = "Panel" } }, body)
 	Stroke(content)
 	win.Pages = Create("Frame", { Position = UDim2.fromOffset(8, 8), Size = UDim2.new(1, -16, 1, -16), BackgroundTransparency = 1 }, content)
 
+	-- tab bar
 	local bar = Create("Frame", { Position = UDim2.new(0, 10, 1, -43), Size = UDim2.new(1, -20, 0, 37), Theme = { BackgroundColor3 = "Panel" } }, body)
 	Stroke(bar)
-	local tabLayout = Create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder,
+	Create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, HorizontalFlex = Enum.UIFlexAlignment.Fill,
+		VerticalFlex = Enum.UIFlexAlignment.Fill, Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder,
 	}, bar)
-	if hasFlex then
-		tabLayout.HorizontalFlex = Enum.UIFlexAlignment.Fill
-		tabLayout.VerticalFlex   = Enum.UIFlexAlignment.Fill
-	end
 	win.TabBar = bar
 
 	function win:SetVisible(v)
@@ -1091,7 +1045,7 @@ function Library:CreateWindow(opts)
 end
 
 ----------------------------------------------------------------------------------------------------
--- Configs
+-- Configs (needs an executor with file functions)
 ----------------------------------------------------------------------------------------------------
 local function HasFS()
 	return (writefile and readfile and isfolder and makefolder and isfile and listfiles and delfile) and true or false
@@ -1157,7 +1111,7 @@ function Library:LoadConfig(name)
 	local path = self.ConfigFolder .. "/" .. CleanName(name) .. ".json"
 	if not isfile(path) then return false, "Config not found" end
 	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
-	if not ok or type(data) ~= "table" then return false, "Corrupt config" end
+	if not ok then return false, "Corrupt config" end
 	for flag, v in pairs(data) do
 		local o = self.Options[flag]
 		if o and not o.SkipConfig then pcall(Deserialize, o, v) end
@@ -1173,7 +1127,7 @@ function Library:DeleteConfig(name)
 end
 
 ----------------------------------------------------------------------------------------------------
--- Settings tab
+-- Ready-made settings tab: menu key, accent color, animation + slider smoothness, configs
 ----------------------------------------------------------------------------------------------------
 function Window:AddSettingsTab(name)
 	local tab = self:AddTab(name or "Settings")
